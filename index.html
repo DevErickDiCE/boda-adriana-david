@@ -1096,6 +1096,11 @@
             <span>Compartir mis fotos y vídeos</span>
           </a>
 
+          <p
+            id="upload-status"
+            style="display:none; margin-top:1.2rem; font-family:var(--font-sans); font-size:0.82rem; letter-spacing:0.06em; text-transform:uppercase; min-height:1.2em;"
+          ></p>
+
           <p class="memories__note">
             Los invitados podrán subir fotos y vídeos del día<br>
             que se guardarán en nuestro álbum especial para siempre
@@ -1191,6 +1196,167 @@
         });
       }
     }, { passive: true });
+  </script>
+
+  <!-- ============================================================
+       PHOTO UPLOAD
+  ============================================================ -->
+  <script>
+  (function () {
+    var btn    = document.getElementById('photo-upload-btn');
+    var status = document.getElementById('upload-status');
+    if (!btn || !status) return;
+
+    // Input oculto — se crea por JS para no tocar el HTML semántico
+    var input = document.createElement('input');
+    input.type     = 'file';
+    input.accept   = 'image/*';
+    input.multiple = true;
+    input.setAttribute('style', 'display:none');
+    document.body.appendChild(input);
+
+    // ── Abrir selector al pulsar botón ────────────────────────
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (btn.dataset.uploading) return;
+      input.value = '';
+      input.click();
+    });
+
+    // ── Flujo principal: selección → compresión → subida ─────
+    input.addEventListener('change', async function () {
+      var files = Array.from(input.files || []);
+      if (!files.length) return;
+
+      // Validar: solo imágenes
+      var images = files.filter(function (f) { return f.type.startsWith('image/'); });
+      if (images.length === 0) {
+        setStatus('Solo se aceptan fotos (no vídeos).', 'error');
+        return;
+      }
+      // Validar: máximo 10
+      if (images.length > 10) {
+        setStatus('Máximo 10 fotos por envío. Selecciona menos fotos.', 'error');
+        return;
+      }
+
+      // Bloquear UI durante la subida
+      btn.dataset.uploading = '1';
+      btn.style.opacity        = '0.55';
+      btn.style.pointerEvents  = 'none';
+
+      try {
+        setStatus('Preparando fotos\u2026', 'loading');
+
+        // Comprimir todas antes de subir
+        var blobs = [];
+        for (var i = 0; i < images.length; i++) {
+          blobs.push(await compressImage(images[i]));
+        }
+
+        // Subir una a una (más fiable en móvil)
+        for (var j = 0; j < blobs.length; j++) {
+          setStatus('Subiendo foto ' + (j + 1) + ' de ' + blobs.length + '\u2026', 'loading');
+          var auth = await fetchAuth();
+          await uploadFile(blobs[j], images[j].name, auth);
+        }
+
+        setStatus('Tus fotos se han subido correctamente \u2764\uFE0F', 'success');
+
+      } catch (err) {
+        console.error('[upload]', err);
+        setStatus('Error al subir las fotos. Inténtalo de nuevo.', 'error');
+      } finally {
+        delete btn.dataset.uploading;
+        btn.style.opacity       = '';
+        btn.style.pointerEvents = '';
+        input.value = '';
+      }
+    });
+
+    // ── Obtener credenciales del servidor ─────────────────────
+    async function fetchAuth() {
+      var res = await fetch('/api/imagekit-auth');
+      if (!res.ok) throw new Error('Auth error: ' + res.status);
+      return res.json();
+    }
+
+    // ── Subir un archivo a ImageKit ───────────────────────────
+    async function uploadFile(blob, originalName, auth) {
+      var base     = originalName.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+      var fileName = base + '_' + Date.now() + '.jpg';
+
+      var form = new FormData();
+      form.append('file',            blob, fileName);
+      form.append('fileName',        fileName);
+      form.append('publicKey',       auth.publicKey);
+      form.append('signature',       auth.signature);
+      form.append('expire',          String(auth.expire));
+      form.append('token',           auth.token);
+      form.append('folder',          '/boda-adriana-david-uploads');
+      form.append('useUniqueFileName', 'true');
+      form.append('tags',            'boda,invitados,2026');
+
+      var res = await fetch('https://upload.imagekit.io/api/v1/files/upload', {
+        method: 'POST',
+        body: form,
+      });
+
+      if (!res.ok) {
+        var text = await res.text();
+        throw new Error('Upload failed ' + res.status + ': ' + text);
+      }
+      return res.json();
+    }
+
+    // ── Comprimir imagen con Canvas ───────────────────────────
+    function compressImage(file) {
+      return new Promise(function (resolve) {
+        var img = new Image();
+        var url = URL.createObjectURL(file);
+
+        img.onload = function () {
+          URL.revokeObjectURL(url);
+          var MAX = 1800;
+          var w = img.naturalWidth;
+          var h = img.naturalHeight;
+
+          if (w > MAX || h > MAX) {
+            if (w >= h) { h = Math.round(h * MAX / w); w = MAX; }
+            else        { w = Math.round(w * MAX / h); h = MAX; }
+          }
+
+          var canvas = document.createElement('canvas');
+          canvas.width  = w;
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+
+          canvas.toBlob(
+            function (blob) { resolve(blob || file); },
+            'image/jpeg',
+            0.82
+          );
+        };
+
+        img.onerror = function () {
+          URL.revokeObjectURL(url);
+          resolve(file); // fallback: subir original
+        };
+
+        img.src = url;
+      });
+    }
+
+    // ── Actualizar mensaje de estado ──────────────────────────
+    function setStatus(msg, type) {
+      status.textContent    = msg;
+      status.style.display  = 'block';
+      status.style.color    =
+        type === 'error'   ? '#b94040' :
+        type === 'success' ? 'var(--gold)' :
+                             'var(--gold-light)';
+    }
+  })();
   </script>
 
 </body>
