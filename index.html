@@ -303,6 +303,7 @@
       background-size: cover;
       background-position: center 55%;
       z-index: 0;
+      filter: hue-rotate(8deg) saturate(1.15);
     }
 
     /* Velo mínimo — solo para legibilidad del texto central */
@@ -311,19 +312,21 @@
       position: absolute;
       inset: 0;
       background: radial-gradient(ellipse 65% 55% at 50% 52%,
-        rgba(247,245,239,0.38) 0%,
-        rgba(247,245,239,0.10) 60%,
+        rgba(226,235,216,0.35) 0%,
+        rgba(226,235,216,0.08) 60%,
         transparent 100%);
     }
 
-    /* Vignette de bordes muy sutil — da profundidad sin tapar flores */
+    /* Tinte verde + vignette */
     .hero__bg::after {
       content: '';
       position: absolute;
       inset: 0;
-      background: radial-gradient(ellipse 100% 100% at 50% 50%,
-        transparent 40%,
-        rgba(180,192,175,0.16) 100%);
+      background:
+        radial-gradient(ellipse 100% 100% at 50% 50%,
+          transparent 40%,
+          rgba(80,110,80,0.22) 100%),
+        rgba(100,130,90,0.12);
     }
 
     /* Marco interior decorativo — efecto invitación premium */
