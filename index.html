@@ -1083,7 +1083,7 @@
           <h2 class="memories__title">Comparte tus recuerdos</h2>
 
           <p class="memories__text">
-            Cada fotografía que hagas en este día es un trozo de nuestra historia.<br>
+            Cada foto y vídeo que hagas en este día es un trozo de nuestra historia.<br>
             Ayúdanos a guardar para siempre los recuerdos de este momento tan especial.
           </p>
 
@@ -1204,7 +1204,7 @@
   </script>
 
   <!-- ============================================================
-       PHOTO UPLOAD
+       PHOTO & VIDEO UPLOAD
   ============================================================ -->
   <script>
   (function () {
@@ -1215,7 +1215,7 @@
     // Input oculto — se crea por JS para no tocar el HTML semántico
     var input = document.createElement('input');
     input.type     = 'file';
-    input.accept   = 'image/*';
+    input.accept   = 'image/*,video/*';
     input.multiple = true;
     input.setAttribute('style', 'display:none');
     document.body.appendChild(input);
@@ -1228,20 +1228,22 @@
       input.click();
     });
 
-    // ── Flujo principal: selección → compresión → subida ─────
+    // ── Flujo principal: selección → preparación → subida ────
     input.addEventListener('change', async function () {
       var files = Array.from(input.files || []);
       if (!files.length) return;
 
-      // Validar: solo imágenes
-      var images = files.filter(function (f) { return f.type.startsWith('image/'); });
-      if (images.length === 0) {
-        setStatus('Solo se aceptan fotos (no vídeos).', 'error');
+      // Validar: solo imágenes y vídeos
+      var media = files.filter(function (f) {
+        return f.type.startsWith('image/') || f.type.startsWith('video/');
+      });
+      if (media.length !== files.length) {
+        setStatus('Solo se aceptan archivos de foto o vídeo.', 'error');
         return;
       }
       // Validar: máximo 10
-      if (images.length > 10) {
-        setStatus('Máximo 10 fotos por envío. Selecciona menos fotos.', 'error');
+      if (media.length > 10) {
+        setStatus('Máximo 10 archivos por envío. Selecciona menos fotos o vídeos.', 'error');
         return;
       }
 
@@ -1251,26 +1253,32 @@
       btn.style.pointerEvents  = 'none';
 
       try {
-        setStatus('Preparando fotos\u2026', 'loading');
+        setStatus('Preparando archivos\u2026', 'loading');
 
-        // Comprimir todas antes de subir
-        var blobs = [];
-        for (var i = 0; i < images.length; i++) {
-          blobs.push(await compressImage(images[i]));
+        // Comprimir las imágenes; los vídeos se suben sin modificar
+        var uploads = [];
+        for (var i = 0; i < media.length; i++) {
+          var file = media[i];
+          uploads.push({
+            data: file.type.startsWith('image/') ? await compressImage(file) : file,
+            name: file.name,
+            isVideo: file.type.startsWith('video/')
+          });
         }
 
         // Subir una a una (más fiable en móvil)
-        for (var j = 0; j < blobs.length; j++) {
-          setStatus('Subiendo foto ' + (j + 1) + ' de ' + blobs.length + '\u2026', 'loading');
+        for (var j = 0; j < uploads.length; j++) {
+          var kind = uploads[j].isVideo ? 'vídeo' : 'foto';
+          setStatus('Subiendo ' + kind + ' ' + (j + 1) + ' de ' + uploads.length + '\u2026', 'loading');
           var auth = await fetchAuth();
-          await uploadFile(blobs[j], images[j].name, auth);
+          await uploadFile(uploads[j].data, uploads[j].name, uploads[j].isVideo, auth);
         }
 
-        setStatus('Tus fotos se han subido correctamente \u2764\uFE0F', 'success');
+        setStatus('Tus fotos y vídeos se han subido correctamente \u2764\uFE0F', 'success');
 
       } catch (err) {
         console.error('[upload]', err);
-        setStatus('Error al subir las fotos. Inténtalo de nuevo.', 'error');
+        setStatus('Error al subir los archivos. Inténtalo de nuevo.', 'error');
       } finally {
         delete btn.dataset.uploading;
         btn.style.opacity       = '';
@@ -1287,9 +1295,11 @@
     }
 
     // ── Subir un archivo a ImageKit ───────────────────────────
-    async function uploadFile(blob, originalName, auth) {
+    async function uploadFile(blob, originalName, isVideo, auth) {
       var base     = originalName.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
-      var fileName = base + '_' + Date.now() + '.jpg';
+      var extensionMatch = originalName.match(/(\.[a-zA-Z0-9]+)$/);
+      var extension = isVideo && extensionMatch ? extensionMatch[1].toLowerCase() : '.jpg';
+      var fileName = base + '_' + Date.now() + extension;
 
       var form = new FormData();
       form.append('file',            blob, fileName);
@@ -1300,7 +1310,7 @@
       form.append('token',           auth.token);
       form.append('folder',          '/boda-adriana-david-uploads');
       form.append('useUniqueFileName', 'true');
-      form.append('tags',            'boda,invitados,2026');
+      form.append('tags',            'boda,invitados,2026,' + (isVideo ? 'video' : 'foto'));
 
       var res = await fetch('https://upload.imagekit.io/api/v1/files/upload', {
         method: 'POST',
