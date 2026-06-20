@@ -1337,7 +1337,6 @@
     var ffmpegPromise = null;   // instancia única (carga perezosa)
     var ffProgressCb  = null;   // callback de progreso activo
     var FF_FFMPEG = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.15/dist/umd';
-    var FF_UTIL   = 'https://unpkg.com/@ffmpeg/util@0.12.2/dist/umd/index.js';
     var FF_CORE   = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
     // Por debajo de este tamaño el vídeo se sube tal cual (no compensa comprimir)
     var VIDEO_COMPRESS_OVER = 20 * 1024 * 1024;   // 20 MB
@@ -1356,15 +1355,25 @@
       });
     }
 
+    // Equivalentes a @ffmpeg/util (que no expone bien su global en Safari):
+    // descargar un recurso y servirlo como blob same-origin.
+    async function toBlobURL(url, mime) {
+      var res = await fetch(url);
+      if (!res.ok) throw new Error('No se pudo cargar ' + url + ' (' + res.status + ')');
+      var buf = await res.arrayBuffer();
+      return URL.createObjectURL(new Blob([buf], { type: mime }));
+    }
+    async function fetchFile(file) {
+      return new Uint8Array(await file.arrayBuffer());
+    }
+
     // Carga ffmpeg.wasm una sola vez. El worker y el core van como blob
     // (los Worker cross-origin desde CDN están bloqueados por seguridad).
     function ensureFFmpeg() {
       if (ffmpegPromise) return ffmpegPromise;
       ffmpegPromise = (async function () {
-        await loadScript(FF_UTIL);
         await loadScript(FF_FFMPEG + '/ffmpeg.js');
-        var FFmpeg    = window.FFmpegWASM.FFmpeg;
-        var toBlobURL = window.FFmpegUtil.toBlobURL;
+        var FFmpeg = window.FFmpegWASM.FFmpeg;
         var ff = new FFmpeg();
         ff.on('progress', function (e) { if (ffProgressCb) ffProgressCb(e); });
         await ff.load({
@@ -1383,12 +1392,11 @@
       try {
         setStatus('Preparando vídeo ' + idx + ' de ' + count + '… (cargando compresor)', 'loading');
         var ff   = await ensureFFmpeg();
-        var util = window.FFmpegUtil;
         var extM = file.name.match(/\.[a-z0-9]+$/i);
         var inN  = 'in_'  + idx + (extM ? extM[0].toLowerCase() : '.mp4');
         var outN = 'out_' + idx + '.mp4';
 
-        await ff.writeFile(inN, await util.fetchFile(file));
+        await ff.writeFile(inN, await fetchFile(file));
         ffProgressCb = function (e) {
           var p = Math.max(0, Math.min(100, Math.round((e.progress || 0) * 100)));
           setStatus('Comprimiendo vídeo ' + idx + ' de ' + count + '… ' + p + '%', 'loading');
