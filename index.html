@@ -1256,17 +1256,29 @@
       try {
         setStatus('Preparando archivos\u2026', 'loading');
 
-        // Comprimir las imágenes; los vídeos se suben sin modificar
+        // Preparar: comprimir fotos (canvas) y vídeos grandes (ffmpeg.wasm)
         var uploads = [];
         for (var i = 0; i < media.length; i++) {
           var file = media[i];
-          uploads.push({
-            data: file.type.startsWith('image/') ? await compressImage(file) : file,
-            name: file.name,
-            isVideo: file.type.startsWith('video/'),
-            progress: 0,
-            done: false
-          });
+          if (file.type.startsWith('image/')) {
+            setStatus('Preparando foto ' + (i + 1) + ' de ' + media.length + '…', 'loading');
+            uploads.push({
+              data: await compressImage(file),
+              name: file.name,
+              isVideo: false,
+              progress: 0,
+              done: false
+            });
+          } else {
+            var v = await prepareVideo(file, i + 1, media.length);
+            uploads.push({
+              data: v.blob,
+              name: v.name,
+              isVideo: true,
+              progress: 0,
+              done: false
+            });
+          }
         }
 
         // Estado agregado: % global mientras suben en paralelo
@@ -1319,6 +1331,86 @@
       var res = await fetch('/api/imagekit-auth');
       if (!res.ok) throw new Error('Auth error: ' + res.status);
       return res.json();
+    }
+
+    // ── ffmpeg.wasm: compresión de vídeo en el navegador ──────
+    var ffmpegPromise = null;   // instancia única (carga perezosa)
+    var ffProgressCb  = null;   // callback de progreso activo
+    var FF_FFMPEG = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.15/dist/umd';
+    var FF_UTIL   = 'https://unpkg.com/@ffmpeg/util@0.12.2/dist/umd/index.js';
+    var FF_CORE   = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
+    // Por debajo de este tamaño el vídeo se sube tal cual (no compensa comprimir)
+    var VIDEO_COMPRESS_OVER = 20 * 1024 * 1024; // 20 MB
+
+    function loadScript(src) {
+      return new Promise(function (resolve, reject) {
+        var s = document.createElement('script');
+        s.src = src;
+        s.onload  = function () { resolve(); };
+        s.onerror = function () { reject(new Error('No se pudo cargar ' + src)); };
+        document.head.appendChild(s);
+      });
+    }
+
+    // Carga ffmpeg.wasm una sola vez. El worker y el core van como blob
+    // (los Worker cross-origin desde CDN están bloqueados por seguridad).
+    function ensureFFmpeg() {
+      if (ffmpegPromise) return ffmpegPromise;
+      ffmpegPromise = (async function () {
+        await loadScript(FF_UTIL);
+        await loadScript(FF_FFMPEG + '/ffmpeg.js');
+        var FFmpeg    = window.FFmpegWASM.FFmpeg;
+        var toBlobURL = window.FFmpegUtil.toBlobURL;
+        var ff = new FFmpeg();
+        ff.on('progress', function (e) { if (ffProgressCb) ffProgressCb(e); });
+        await ff.load({
+          classWorkerURL: await toBlobURL(FF_FFMPEG + '/814.ffmpeg.js', 'text/javascript'),
+          coreURL:        await toBlobURL(FF_CORE   + '/ffmpeg-core.js', 'text/javascript'),
+          wasmURL:        await toBlobURL(FF_CORE   + '/ffmpeg-core.wasm', 'application/wasm')
+        });
+        return ff;
+      })();
+      return ffmpegPromise;
+    }
+
+    // Comprime un vídeo a 720p H.264. Si algo falla, devuelve el original.
+    async function prepareVideo(file, idx, count) {
+      if (file.size <= VIDEO_COMPRESS_OVER) return { blob: file, name: file.name };
+      try {
+        setStatus('Preparando vídeo ' + idx + ' de ' + count + '… (cargando compresor)', 'loading');
+        var ff   = await ensureFFmpeg();
+        var util = window.FFmpegUtil;
+        var extM = file.name.match(/\.[a-z0-9]+$/i);
+        var inN  = 'in_'  + idx + (extM ? extM[0].toLowerCase() : '.mp4');
+        var outN = 'out_' + idx + '.mp4';
+
+        await ff.writeFile(inN, await util.fetchFile(file));
+        ffProgressCb = function (e) {
+          var p = Math.max(0, Math.min(100, Math.round((e.progress || 0) * 100)));
+          setStatus('Comprimiendo vídeo ' + idx + ' de ' + count + '… ' + p + '%', 'loading');
+        };
+        await ff.exec([
+          '-i', inN,
+          '-vf', "scale='min(1280,iw)':-2",
+          '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28',
+          '-c:a', 'aac', '-b:a', '128k',
+          '-movflags', '+faststart',
+          outN
+        ]);
+        ffProgressCb = null;
+
+        var data = await ff.readFile(outN);
+        var blob = new Blob([data.buffer], { type: 'video/mp4' });
+        try { await ff.deleteFile(inN); await ff.deleteFile(outN); } catch (e) {}
+
+        // Si no encogió (o quedó vacío), mejor el original
+        if (!blob.size || blob.size >= file.size) return { blob: file, name: file.name };
+        return { blob: blob, name: file.name.replace(/\.[^.]+$/, '') + '.mp4' };
+      } catch (err) {
+        ffProgressCb = null;
+        console.warn('[video] no se pudo comprimir, se sube el original:', err);
+        return { blob: file, name: file.name };
+      }
     }
 
     // ── Subir un archivo a ImageKit (XHR para tener progreso) ──
