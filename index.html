@@ -1305,7 +1305,7 @@
 
       } catch (err) {
         console.error('[upload]', err);
-        setStatus('Error al subir los archivos. Inténtalo de nuevo.', 'error');
+        setStatus('Error: ' + (err && err.message ? err.message : 'desconocido'), 'error');
       } finally {
         delete btn.dataset.uploading;
         btn.style.opacity       = '';
