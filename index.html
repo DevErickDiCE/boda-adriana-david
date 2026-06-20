@@ -1317,7 +1317,7 @@
 
         // Subió lo que cabía; si además había vídeos enormes, mensaje simpático
         if (bigVideos.length) {
-          setStatus(BIG_VIDEO_MSG, 'success');
+          setStatus(BIG_VIDEO_MSG_MIXED, 'success');
           return;
         }
 
@@ -1345,6 +1345,8 @@
     // Tope real de ImageKit; por encima la subida rebota con error 400.
     var IMAGEKIT_MAX = 314572800; // 300 MB
     var BIG_VIDEO_MSG = '¡Uy, menudo peliculón! 🎬 Tu vídeo es taaan épico que no cabe aquí. Mándaselo directito a Adriana o David y que lo guarden ellos 😄💚';
+    // Caso mixto: las fotos sí subieron, pero había un vídeo demasiado grande
+    var BIG_VIDEO_MSG_MIXED = '¡Fotos guardadas! 📸 Pero tu vídeo es muy largo, mándaselo a Adriana o David 💚';
 
     // ── Subir un archivo a ImageKit (XHR para tener progreso) ──
     function uploadFile(blob, originalName, isVideo, auth, onProgress) {
