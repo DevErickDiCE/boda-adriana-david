@@ -1336,8 +1336,7 @@
     // ── ffmpeg.wasm: compresión de vídeo en el navegador ──────
     var ffmpegPromise = null;   // instancia única (carga perezosa)
     var ffProgressCb  = null;   // callback de progreso activo
-    var FF_FFMPEG = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.15/dist/umd';
-    var FF_CORE   = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
+    var FF_BASE = '/ffmpeg';   // ffmpeg.wasm alojado en el propio sitio (same-origin)
     // Por debajo de este tamaño el vídeo se sube tal cual (no compensa comprimir)
     var VIDEO_COMPRESS_OVER = 20 * 1024 * 1024;   // 20 MB
     // Límite duro de ImageKit: por encima, la subida rebota con error 400
@@ -1355,31 +1354,26 @@
       });
     }
 
-    // Equivalentes a @ffmpeg/util (que no expone bien su global en Safari):
-    // descargar un recurso y servirlo como blob same-origin.
-    async function toBlobURL(url, mime) {
-      var res = await fetch(url);
-      if (!res.ok) throw new Error('No se pudo cargar ' + url + ' (' + res.status + ')');
-      var buf = await res.arrayBuffer();
-      return URL.createObjectURL(new Blob([buf], { type: mime }));
-    }
+    // File -> Uint8Array (lo que ffmpeg.writeFile espera)
     async function fetchFile(file) {
       return new Uint8Array(await file.arrayBuffer());
     }
 
-    // Carga ffmpeg.wasm una sola vez. El worker y el core van como blob
-    // (los Worker cross-origin desde CDN están bloqueados por seguridad).
+    // Carga ffmpeg.wasm una sola vez, todo desde el propio sitio (same-origin).
+    // Cargar ffmpeg.js así fija el publicPath a /ffmpeg/, y ffmpeg crea el
+    // worker CLÁSICO (que usa importScripts) por sí mismo. NO pasamos
+    // classWorkerURL: con este build forzaría un worker de módulo donde
+    // importScripts no existe ("Cannot find module").
     function ensureFFmpeg() {
       if (ffmpegPromise) return ffmpegPromise;
       ffmpegPromise = (async function () {
-        await loadScript(FF_FFMPEG + '/ffmpeg.js');
+        await loadScript(FF_BASE + '/ffmpeg.js');
         var FFmpeg = window.FFmpegWASM.FFmpeg;
         var ff = new FFmpeg();
         ff.on('progress', function (e) { if (ffProgressCb) ffProgressCb(e); });
         await ff.load({
-          classWorkerURL: await toBlobURL(FF_FFMPEG + '/814.ffmpeg.js', 'text/javascript'),
-          coreURL:        await toBlobURL(FF_CORE   + '/ffmpeg-core.js', 'text/javascript'),
-          wasmURL:        await toBlobURL(FF_CORE   + '/ffmpeg-core.wasm', 'application/wasm')
+          coreURL: new URL(FF_BASE + '/ffmpeg-core.js',   location.origin).href,
+          wasmURL: new URL(FF_BASE + '/ffmpeg-core.wasm', location.origin).href
         });
         return ff;
       })();
