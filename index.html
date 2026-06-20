@@ -1340,7 +1340,11 @@
     var FF_UTIL   = 'https://unpkg.com/@ffmpeg/util@0.12.2/dist/umd/index.js';
     var FF_CORE   = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
     // Por debajo de este tamaño el vídeo se sube tal cual (no compensa comprimir)
-    var VIDEO_COMPRESS_OVER = 20 * 1024 * 1024; // 20 MB
+    var VIDEO_COMPRESS_OVER = 20 * 1024 * 1024;   // 20 MB
+    // Límite duro de ImageKit: por encima, la subida rebota con error 400
+    var IMAGEKIT_MAX = 314572800;                 // 300 MB
+
+    function mb(bytes) { return (bytes / 1048576).toFixed(0) + ' MB'; }
 
     function loadScript(src) {
       return new Promise(function (resolve, reject) {
@@ -1403,13 +1407,25 @@
         var blob = new Blob([data.buffer], { type: 'video/mp4' });
         try { await ff.deleteFile(inN); await ff.deleteFile(outN); } catch (e) {}
 
-        // Si no encogió (o quedó vacío), mejor el original
-        if (!blob.size || blob.size >= file.size) return { blob: file, name: file.name };
-        return { blob: blob, name: file.name.replace(/\.[^.]+$/, '') + '.mp4' };
+        // Si no encogió (o quedó vacío), usar el original
+        var out = (!blob.size || blob.size >= file.size)
+          ? { blob: file, name: file.name }
+          : { blob: blob, name: file.name.replace(/\.[^.]+$/, '') + '.mp4' };
+
+        // Aún por encima del límite: avisar claro en vez de rebotar en ImageKit
+        if (out.blob.size > IMAGEKIT_MAX) {
+          throw new Error('aún pesa ' + mb(out.blob.size) + ' tras comprimir');
+        }
+        return out;
       } catch (err) {
         ffProgressCb = null;
-        console.warn('[video] no se pudo comprimir, se sube el original:', err);
-        return { blob: file, name: file.name };
+        var reason = err && err.message ? err.message : 'error desconocido';
+        console.warn('[video] compresión falló:', err);
+        // Si cabe sin comprimir, lo subimos igual; si no, avisamos con el motivo
+        if (file.size <= IMAGEKIT_MAX) return { blob: file, name: file.name };
+        throw new Error('El vídeo pesa ' + mb(file.size) +
+          ' y no se pudo comprimir en este móvil (' + reason +
+          '). Graba un clip más corto o en menor calidad.');
       }
     }
 
