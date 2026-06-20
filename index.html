@@ -1389,18 +1389,24 @@
     // Comprime un vídeo a 720p H.264. Si algo falla, devuelve el original.
     async function prepareVideo(file, idx, count) {
       if (file.size <= VIDEO_COMPRESS_OVER) return { blob: file, name: file.name };
+      var stage = 'inicio';
       try {
         setStatus('Preparando vídeo ' + idx + ' de ' + count + '… (cargando compresor)', 'loading');
+        stage = 'cargar-ffmpeg';
         var ff   = await ensureFFmpeg();
         var extM = file.name.match(/\.[a-z0-9]+$/i);
         var inN  = 'in_'  + idx + (extM ? extM[0].toLowerCase() : '.mp4');
         var outN = 'out_' + idx + '.mp4';
 
-        await ff.writeFile(inN, await fetchFile(file));
+        stage = 'leer-archivo';
+        var bytes = await fetchFile(file);
+        stage = 'escribir-ffmpeg';
+        await ff.writeFile(inN, bytes);
         ffProgressCb = function (e) {
           var p = Math.max(0, Math.min(100, Math.round((e.progress || 0) * 100)));
           setStatus('Comprimiendo vídeo ' + idx + ' de ' + count + '… ' + p + '%', 'loading');
         };
+        stage = 'comprimir';
         await ff.exec([
           '-i', inN,
           '-vf', "scale='min(1280,iw)':-2",
@@ -1411,6 +1417,7 @@
         ]);
         ffProgressCb = null;
 
+        stage = 'leer-resultado';
         var data = await ff.readFile(outN);
         var blob = new Blob([data.buffer], { type: 'video/mp4' });
         try { await ff.deleteFile(inN); await ff.deleteFile(outN); } catch (e) {}
@@ -1427,13 +1434,15 @@
         return out;
       } catch (err) {
         ffProgressCb = null;
-        var reason = err && err.message ? err.message : 'error desconocido';
-        console.warn('[video] compresión falló:', err);
+        var reason = (err && (err.message || err.name)) ||
+          (typeof err === 'string' ? err : '') ||
+          (err ? String(err) : '') || 'sin mensaje';
+        console.warn('[video] compresión falló en paso "' + stage + '":', err);
         // Si cabe sin comprimir, lo subimos igual; si no, avisamos con el motivo
         if (file.size <= IMAGEKIT_MAX) return { blob: file, name: file.name };
         throw new Error('El vídeo pesa ' + mb(file.size) +
-          ' y no se pudo comprimir en este móvil (' + reason +
-          '). Graba un clip más corto o en menor calidad.');
+          ' y no se pudo comprimir en este móvil [paso: ' + stage + ' — ' + reason +
+          ']. Graba un clip más corto o en menor calidad.');
       }
     }
 
