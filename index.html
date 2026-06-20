@@ -1263,17 +1263,43 @@
           uploads.push({
             data: file.type.startsWith('image/') ? await compressImage(file) : file,
             name: file.name,
-            isVideo: file.type.startsWith('video/')
+            isVideo: file.type.startsWith('video/'),
+            progress: 0,
+            done: false
           });
         }
 
-        // Subir una a una (más fiable en móvil)
-        for (var j = 0; j < uploads.length; j++) {
-          var kind = uploads[j].isVideo ? 'vídeo' : 'foto';
-          setStatus('Subiendo ' + kind + ' ' + (j + 1) + ' de ' + uploads.length + '\u2026', 'loading');
-          var auth = await fetchAuth();
-          await uploadFile(uploads[j].data, uploads[j].name, uploads[j].isVideo, auth);
+        // Estado agregado: % global mientras suben en paralelo
+        var total = uploads.length;
+        function refreshStatus() {
+          var doneCount = uploads.filter(function (u) { return u.done; }).length;
+          var pct = Math.round(
+            uploads.reduce(function (s, u) { return s + u.progress; }, 0) / total
+          );
+          setStatus('Subiendo ' + Math.min(doneCount + 1, total) +
+            ' de ' + total + '… ' + pct + '%', 'loading');
         }
+        refreshStatus();
+
+        // Subir en paralelo (mas rapido); cada subida reporta su progreso
+        var next = 0;
+        async function worker() {
+          while (next < uploads.length) {
+            var u = uploads[next++];
+            var auth = await fetchAuth();
+            await uploadFile(u.data, u.name, u.isVideo, auth, function (p) {
+              u.progress = p;
+              refreshStatus();
+            });
+            u.progress = 100;
+            u.done = true;
+            refreshStatus();
+          }
+        }
+        var workers = [];
+        var CONCURRENCY = Math.min(4, uploads.length);
+        for (var w = 0; w < CONCURRENCY; w++) workers.push(worker());
+        await Promise.all(workers);
 
         setStatus('Tus fotos y vídeos se han subido correctamente \u2764\uFE0F', 'success');
 
@@ -1295,8 +1321,8 @@
       return res.json();
     }
 
-    // ── Subir un archivo a ImageKit ───────────────────────────
-    async function uploadFile(blob, originalName, isVideo, auth) {
+    // ── Subir un archivo a ImageKit (XHR para tener progreso) ──
+    function uploadFile(blob, originalName, isVideo, auth, onProgress) {
       var base     = originalName.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
       var extensionMatch = originalName.match(/(\.[a-zA-Z0-9]+)$/);
       var extension = isVideo && extensionMatch ? extensionMatch[1].toLowerCase() : '.jpg';
@@ -1313,16 +1339,27 @@
       form.append('useUniqueFileName', 'true');
       form.append('tags',            'boda,invitados,2026,' + (isVideo ? 'video' : 'foto'));
 
-      var res = await fetch('https://upload.imagekit.io/api/v1/files/upload', {
-        method: 'POST',
-        body: form,
-      });
+      return new Promise(function (resolve, reject) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', 'https://upload.imagekit.io/api/v1/files/upload');
 
-      if (!res.ok) {
-        var text = await res.text();
-        throw new Error('Upload failed ' + res.status + ': ' + text);
-      }
-      return res.json();
+        if (onProgress) {
+          xhr.upload.onprogress = function (e) {
+            if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100));
+          };
+        }
+        xhr.onload = function () {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try { resolve(JSON.parse(xhr.responseText)); }
+            catch (e) { resolve({}); }
+          } else {
+            reject(new Error('Upload failed ' + xhr.status + ': ' + xhr.responseText));
+          }
+        };
+        xhr.onerror   = function () { reject(new Error('Network error during upload')); };
+        xhr.ontimeout = function () { reject(new Error('Upload timeout')); };
+        xhr.send(form);
+      });
     }
 
     // ── Comprimir imagen con Canvas ───────────────────────────
